@@ -57,6 +57,23 @@ const isLiveProviderSession = (
   session: OrchestrationV2ThreadProjection["providerSessions"][number],
 ) => session.status !== "stopped" && session.status !== "error";
 
+/**
+ * The workspace a switched session runs in. A session already inside the
+ * thread's worktree stays where it is: a project rooted in a subdirectory runs
+ * in that directory of the worktree, not at its root.
+ */
+const targetWorkspace = (
+  worktreePath: string | null,
+  sessionCwd: string | undefined,
+): string | undefined => {
+  if (worktreePath === null) return sessionCwd;
+  if (sessionCwd === undefined) return worktreePath;
+  const root = worktreePath.replace(/[\\/]+$/, "");
+  const insideWorktree =
+    sessionCwd === root || sessionCwd.startsWith(`${root}/`) || sessionCwd.startsWith(`${root}\\`);
+  return insideWorktree ? sessionCwd : worktreePath;
+};
+
 export const layer: Layer.Layer<
   ProviderSwitchServiceV2,
   never,
@@ -157,8 +174,7 @@ export const layer: Layer.Layer<
                     runtimeMode: projection.thread.runtimeMode,
                     interactionMode: projection.thread.interactionMode,
                     workspace:
-                      projection.thread.worktreePath ??
-                      currentSession?.cwd ??
+                      targetWorkspace(projection.thread.worktreePath, currentSession?.cwd) ??
                       "<unresolved-workspace>",
                     capabilities: targetInstance.value.capabilities,
                     available: targetInstance.value.enabled,

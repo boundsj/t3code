@@ -341,3 +341,33 @@ it.effect("distinguishes compatible and incompatible instances of the same drive
     ),
   ),
 );
+
+it.effect("keeps a subdirectory project's session when the model changes", () =>
+  Effect.gen(function* () {
+    const service = yield* ProviderSwitch.ProviderSwitchServiceV2;
+    const thread = projection();
+    const sessionIn = (cwd: string) => ({
+      ...thread,
+      providerSessions: [{ ...thread.providerSessions[0]!, cwd }],
+    });
+    const targetModelSelection = { instanceId: currentInstanceId, model: "gpt-5.2-codex" };
+    // The worktree is /repo; the project's agent runs in /repo/ios.
+    const sameWorktree = yield* service.plan({
+      projection: sessionIn("/repo/ios"),
+      targetModelSelection,
+    });
+    const otherCheckout = yield* service.plan({
+      projection: sessionIn("/elsewhere/ios"),
+      targetModelSelection,
+    });
+    assert.notEqual(sameWorktree.transition.type, "restart_and_resume");
+    assert.deepEqual(sameWorktree.releaseProviderSessionIds, []);
+    assert.equal(otherCheckout.transition.type, "restart_and_resume");
+  }).pipe(
+    Effect.provide(
+      layerTest({ [currentInstanceId]: { continuationKey: "codex:account:primary" } }, () =>
+        Effect.succeed({ type: "apply_on_next_turn" }),
+      ),
+    ),
+  ),
+);

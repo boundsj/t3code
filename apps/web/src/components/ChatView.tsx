@@ -4157,7 +4157,7 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeProjectRepositoryRoot = activeProject?.repositoryIdentity?.rootPath ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
-  const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const activeWorkspaceRoot = gitCwd ?? activeThreadWorktreePath ?? undefined;
   useLayoutEffect(() => {
     if (
       threadDetailLoading ||
