@@ -620,9 +620,9 @@ function ThreadRouteContent(
   );
   const FilesInspector = useCallback(
     () =>
-      selectedThread !== null && selectedThreadCwd !== null ? (
+      selectedThread !== null && selectedThreadWorkingDirectory !== null ? (
         <ThreadFileNavigatorPane
-          cwd={selectedThreadCwd}
+          cwd={selectedThreadWorkingDirectory}
           environmentId={selectedThread.environmentId}
           headerInset={inspectorHeaderInset}
           projectName={selectedThreadProject?.title ?? "Files"}
@@ -634,8 +634,8 @@ function ThreadRouteContent(
       handleSelectInspectorFile,
       inspectorHeaderInset,
       selectedThread,
-      selectedThreadCwd,
       selectedThreadProject?.title,
+      selectedThreadWorkingDirectory,
     ],
   );
   const RouteInspector = useCallback(
