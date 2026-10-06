@@ -10,10 +10,12 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProjectStore from "./ProjectStore.ts";
@@ -76,7 +78,31 @@ const providerInstanceFor = (instanceId: ProviderInstanceId) =>
     },
   }) as ProviderInstance;
 
+// The project is the `ios` directory of the repository at /repo. Only the
+// /repo-worktree checkout has that directory.
+const existingPaths = new Set(["/repo-worktree/ios"]);
+
 const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
+  Layer.provide(
+    Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+      resolve: () =>
+        Effect.succeed({
+          canonicalKey: "github.com/t3/repo",
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "git@github.com:t3/repo.git",
+          },
+          rootPath: "/repo",
+        }),
+    }),
+  ),
+  Layer.provide(
+    Layer.succeed(
+      FileSystem.FileSystem,
+      FileSystem.makeNoop({ exists: (path) => Effect.succeed(existingPaths.has(path)) }),
+    ),
+  ),
   Layer.provide(
     Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
       getInstance: (instanceId) => Effect.succeed(providerInstanceFor(instanceId)),
@@ -93,7 +119,7 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
           Option.some({
             projectId,
             title: "Project",
-            workspaceRoot: "/project-root",
+            workspaceRoot: "/repo/ios",
             defaultModelSelection: null,
             defaultThreadEnvMode: null,
             autoPull: false,
@@ -118,19 +144,31 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
         thread: makeThread({ now, worktreePath: null }),
         modelSelection,
       });
-      assert.equal(resolved.cwd, "/project-root");
+      assert.equal(resolved.cwd, "/repo/ios");
     }),
   );
 
-  it.effect("prefers a provisioned worktree over the project root", () =>
+  it.effect("runs a worktree thread in the project's directory inside the worktree", () =>
     Effect.gen(function* () {
       const policy = yield* RuntimePolicy.RuntimePolicyV2;
       const now = yield* DateTime.now;
       const resolved = yield* policy.resolve({
-        thread: makeThread({ now, worktreePath: "/project-worktree" }),
+        thread: makeThread({ now, worktreePath: "/repo-worktree" }),
         modelSelection,
       });
-      assert.equal(resolved.cwd, "/project-worktree");
+      assert.equal(resolved.cwd, "/repo-worktree/ios");
+    }),
+  );
+
+  it.effect("runs at the worktree root when its branch lacks the project's directory", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const resolved = yield* policy.resolve({
+        thread: makeThread({ now, worktreePath: "/older-worktree" }),
+        modelSelection,
+      });
+      assert.equal(resolved.cwd, "/older-worktree");
     }),
   );
 
