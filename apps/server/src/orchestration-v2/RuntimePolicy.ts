@@ -126,11 +126,16 @@ export const layerFromProjectStore: Layer.Layer<
       if (cwd === worktreePath) return worktreePath;
       // The session manager refuses a cwd that is not a directory, so a file
       // at that path in this branch must not stop the thread from starting.
-      const isDirectory = yield* fileSystem.stat(cwd).pipe(
+      // Only a missing path (or one blocked by a file) means the branch lacks
+      // the directory; any other error keeps the project's path, so it
+      // surfaces where the session opens instead of silently moving the agent.
+      const usesProjectPath = yield* fileSystem.stat(cwd).pipe(
         Effect.map((stat) => stat.type === "Directory"),
-        Effect.orElseSucceed(() => false),
+        Effect.catch((error) =>
+          Effect.succeed(error.reason._tag !== "NotFound" && error.reason._tag !== "BadResource"),
+        ),
       );
-      return isDirectory ? cwd : worktreePath;
+      return usesProjectPath ? cwd : worktreePath;
     });
     return RuntimePolicyV2.of({
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {

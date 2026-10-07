@@ -80,15 +80,21 @@ const providerInstanceFor = (instanceId: ProviderInstanceId) =>
   }) as ProviderInstance;
 
 // The project is the `ios` directory of the repository at /repo. Only the
-// /repo-worktree checkout has that directory; /file-worktree has a file there.
+// /repo-worktree checkout has that directory; /file-worktree has a file there,
+// /blocked-worktree has a file where a parent directory belongs, and
+// /denied-worktree cannot be read. Any other path does not exist.
 const directories = new Set(["/repo-worktree/ios"]);
 const files = new Set(["/file-worktree/ios"]);
+const statErrors = new Map<string, PlatformError.SystemErrorTag>([
+  ["/blocked-worktree/ios", "BadResource"],
+  ["/denied-worktree/ios", "PermissionDenied"],
+]);
 const statOf = (path: string) =>
   directories.has(path) || files.has(path)
     ? Effect.succeed({ type: directories.has(path) ? "Directory" : "File" } as FileSystem.File.Info)
     : Effect.fail(
         PlatformError.systemError({
-          _tag: "NotFound",
+          _tag: statErrors.get(path) ?? "NotFound",
           module: "FileSystem",
           method: "stat",
           pathOrDescriptor: path,
@@ -189,6 +195,32 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
         modelSelection,
       });
       assert.equal(resolved.cwd, "/file-worktree");
+    }),
+  );
+
+  it.effect("runs at the worktree root when a file blocks the project's path", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const resolved = yield* policy.resolve({
+        thread: makeThread({ now, worktreePath: "/blocked-worktree" }),
+        modelSelection,
+      });
+      assert.equal(resolved.cwd, "/blocked-worktree");
+    }),
+  );
+
+  it.effect("keeps the project's path when it cannot be read", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const resolved = yield* policy.resolve({
+        thread: makeThread({ now, worktreePath: "/denied-worktree" }),
+        modelSelection,
+      });
+      // The session reports the permission error instead of the agent
+      // silently starting at the worktree root.
+      assert.equal(resolved.cwd, "/denied-worktree/ios");
     }),
   );
 
