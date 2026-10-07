@@ -6,6 +6,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -68,9 +69,13 @@ const targetWorkspace = (
 ): string | undefined => {
   if (worktreePath === null) return sessionCwd;
   if (sessionCwd === undefined) return worktreePath;
-  const root = worktreePath.replace(/[\\/]+$/, "");
+  // Compared in normalized form, so trailing separators, mixed separators and
+  // Windows drive-letter case do not read as a different workspace.
+  const root = normalizeProjectPathForComparison(worktreePath);
+  const cwd = normalizeProjectPathForComparison(sessionCwd);
+  const separator = root.includes("\\") ? "\\" : "/";
   const insideWorktree =
-    sessionCwd === root || sessionCwd.startsWith(`${root}/`) || sessionCwd.startsWith(`${root}\\`);
+    cwd === root || cwd.startsWith(root.endsWith(separator) ? root : `${root}${separator}`);
   return insideWorktree ? sessionCwd : worktreePath;
 };
 
