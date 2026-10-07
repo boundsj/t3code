@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
 
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
@@ -79,8 +80,20 @@ const providerInstanceFor = (instanceId: ProviderInstanceId) =>
   }) as ProviderInstance;
 
 // The project is the `ios` directory of the repository at /repo. Only the
-// /repo-worktree checkout has that directory.
-const existingPaths = new Set(["/repo-worktree/ios"]);
+// /repo-worktree checkout has that directory; /file-worktree has a file there.
+const directories = new Set(["/repo-worktree/ios"]);
+const files = new Set(["/file-worktree/ios"]);
+const statOf = (path: string) =>
+  directories.has(path) || files.has(path)
+    ? Effect.succeed({ type: directories.has(path) ? "Directory" : "File" } as FileSystem.File.Info)
+    : Effect.fail(
+        PlatformError.systemError({
+          _tag: "NotFound",
+          module: "FileSystem",
+          method: "stat",
+          pathOrDescriptor: path,
+        }),
+      );
 
 const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
   Layer.provide(
@@ -97,12 +110,7 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
         }),
     }),
   ),
-  Layer.provide(
-    Layer.succeed(
-      FileSystem.FileSystem,
-      FileSystem.makeNoop({ exists: (path) => Effect.succeed(existingPaths.has(path)) }),
-    ),
-  ),
+  Layer.provide(Layer.succeed(FileSystem.FileSystem, FileSystem.makeNoop({ stat: statOf }))),
   Layer.provide(
     Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
       getInstance: (instanceId) => Effect.succeed(providerInstanceFor(instanceId)),
@@ -169,6 +177,18 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
         modelSelection,
       });
       assert.equal(resolved.cwd, "/older-worktree");
+    }),
+  );
+
+  it.effect("runs at the worktree root when its branch has a file at the project's path", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const resolved = yield* policy.resolve({
+        thread: makeThread({ now, worktreePath: "/file-worktree" }),
+        modelSelection,
+      });
+      assert.equal(resolved.cwd, "/file-worktree");
     }),
   );
 

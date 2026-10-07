@@ -124,8 +124,13 @@ export const layerFromProjectStore: Layer.Layer<
         worktreePath,
       });
       if (cwd === worktreePath) return worktreePath;
-      const exists = yield* fileSystem.exists(cwd).pipe(Effect.orElseSucceed(() => false));
-      return exists ? cwd : worktreePath;
+      // The session manager refuses a cwd that is not a directory, so a file
+      // at that path in this branch must not stop the thread from starting.
+      const isDirectory = yield* fileSystem.stat(cwd).pipe(
+        Effect.map((stat) => stat.type === "Directory"),
+        Effect.orElseSucceed(() => false),
+      );
+      return isDirectory ? cwd : worktreePath;
     });
     return RuntimePolicyV2.of({
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
