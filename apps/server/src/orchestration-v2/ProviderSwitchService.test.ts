@@ -12,10 +12,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
-import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { acpSelectionTransition } from "./ProviderSelectionTransition.ts";
+import { acpSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import * as ProviderSwitch from "./ProviderSwitchService.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const driver = ProviderDriverKind.make("codex");
 const currentInstanceId = ProviderInstanceId.make("codex_primary");
@@ -67,10 +67,12 @@ function deadSessionRecord(
 
 function layerTest(
   metadata: Readonly<Record<string, { continuationKey: string }>>,
-  planSelectionTransition: ProviderAdapterV2Shape["planSelectionTransition"] = () =>
+  planSelectionTransition: ProviderAdapter.ProviderAdapterV2["Service"]["planSelectionTransition"] = () =>
     Effect.succeed({ type: "restart_session" }),
 ) {
-  const adapter = (instanceId: ProviderInstanceId): ProviderAdapterV2Shape => ({
+  const adapter = (
+    instanceId: ProviderInstanceId,
+  ): ProviderAdapter.ProviderAdapterV2["Service"] => ({
     instanceId,
     driver,
     getCapabilities: () => Effect.succeed(capabilitiesWithoutModelSwitch),
@@ -338,6 +340,69 @@ it.effect("distinguishes compatible and incompatible instances of the same drive
         codex_compatible: { continuationKey: "codex:account:primary" },
         codex_incompatible: { continuationKey: "codex:account:other" },
       }),
+    ),
+  ),
+);
+
+it.effect("keeps a subdirectory project's session when the model changes", () =>
+  Effect.gen(function* () {
+    const service = yield* ProviderSwitch.ProviderSwitchServiceV2;
+    const thread = projection();
+    const sessionIn = (cwd: string) => ({
+      ...thread,
+      providerSessions: [{ ...thread.providerSessions[0]!, cwd }],
+    });
+    const targetModelSelection = { instanceId: currentInstanceId, model: "gpt-5.2-codex" };
+    // The worktree is /repo; the project's agent runs in /repo/ios.
+    const sameWorktree = yield* service.plan({
+      projection: sessionIn("/repo/ios"),
+      targetModelSelection,
+    });
+    const otherCheckout = yield* service.plan({
+      projection: sessionIn("/elsewhere/ios"),
+      targetModelSelection,
+    });
+    assert.notEqual(sameWorktree.transition.type, "restart_and_resume");
+    assert.deepEqual(sameWorktree.releaseProviderSessionIds, []);
+    assert.equal(otherCheckout.transition.type, "restart_and_resume");
+  }).pipe(
+    Effect.provide(
+      layerTest({ [currentInstanceId]: { continuationKey: "codex:account:primary" } }, () =>
+        Effect.succeed({ type: "apply_on_next_turn" }),
+      ),
+    ),
+  ),
+);
+
+it.effect("matches the session to its worktree regardless of path spelling", () =>
+  Effect.gen(function* () {
+    const service = yield* ProviderSwitch.ProviderSwitchServiceV2;
+    const thread = projection();
+    const transitionFor = (worktreePath: string, cwd: string) =>
+      service
+        .plan({
+          projection: {
+            ...thread,
+            thread: { ...thread.thread, worktreePath },
+            providerSessions: [{ ...thread.providerSessions[0]!, cwd }],
+          },
+          targetModelSelection: { instanceId: currentInstanceId, model: "gpt-5.2-codex" },
+        })
+        .pipe(Effect.map((result) => result.transition.type));
+
+    // Same worktree, spelled differently: the session is kept.
+    assert.notEqual(yield* transitionFor("/repo/", "/repo/ios"), "restart_and_resume");
+    assert.notEqual(
+      yield* transitionFor("C:\\Worktrees\\Feature", "c:/worktrees/feature\\ios"),
+      "restart_and_resume",
+    );
+    // A sibling directory sharing the prefix is a different workspace.
+    assert.equal(yield* transitionFor("/repo", "/repo-other/ios"), "restart_and_resume");
+  }).pipe(
+    Effect.provide(
+      layerTest({ [currentInstanceId]: { continuationKey: "codex:account:primary" } }, () =>
+        Effect.succeed({ type: "apply_on_next_turn" }),
+      ),
     ),
   ),
 );

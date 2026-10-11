@@ -23,10 +23,12 @@ import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
+import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { useFileContextMenuHandler } from "../fileContextMenu";
 import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
+import { projectScriptCwd } from "@t3tools/shared/projectScripts";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
@@ -223,6 +225,8 @@ export default function DiffPanel({
   const activeThreadId = routeThreadRef?.threadId ?? null;
   const activeThread = useThreadShell(routeThreadRef);
   const activeThreadProjection = useThreadProjection(routeThreadRef)?.projection ?? null;
+  const fileAccess = useFilesystemReadAccess(activeThread?.environmentId ?? null);
+  const { canReadFiles } = fileAccess;
   const activeProjectId = activeThread?.projectId ?? null;
   const activeProject = useProject(
     activeThread && activeProjectId
@@ -233,9 +237,22 @@ export default function DiffPanel({
       : null,
   );
   const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
+  // Git reads run at the checkout root; opened files resolve in the project's
+  // directory, where the file panel is rooted. In a worktree that directory
+  // sits at the same place below the worktree as the project does in its
+  // repository.
   const activeRepositoryRoot = activeThread?.worktreePath
-    ? undefined
+    ? activeThread.worktreePath
     : activeProject?.repositoryIdentity?.rootPath;
+  const activeFileRoot = activeProject
+    ? projectScriptCwd({
+        project: {
+          cwd: activeProject.workspaceRoot,
+          repositoryRoot: activeProject.repositoryIdentity?.rootPath,
+        },
+        worktreePath: activeThread?.worktreePath ?? null,
+      })
+    : activeCwd;
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -336,8 +353,8 @@ export default function DiffPanel({
     },
     { enabled: isGitRepo && selectedTurn !== undefined },
   );
-  const primaryBranchDiffPreview = useEnvironmentQuery(
-    selectedRunId === null && activeThread && activeCwd
+  const branchDiffPreview = useEnvironmentQuery(
+    canReadFiles && selectedRunId === null && activeThread && activeCwd
       ? reviewEnvironment.diffPreview({
           environmentId: activeThread.environmentId,
           input: {
@@ -348,26 +365,6 @@ export default function DiffPanel({
         })
       : null,
   );
-  const shouldRetryBranchDiffAtEnvironmentCwd =
-    selectedRunId === null &&
-    primaryBranchDiffPreview.error?.includes("configured workspace root") === true &&
-    serverConfig?.cwd !== undefined &&
-    serverConfig.cwd !== activeCwd;
-  const fallbackBranchDiffPreview = useEnvironmentQuery(
-    shouldRetryBranchDiffAtEnvironmentCwd && activeThread && serverConfig
-      ? reviewEnvironment.diffPreview({
-          environmentId: activeThread.environmentId,
-          input: {
-            cwd: serverConfig.cwd,
-            ...(selectedBaseRef ? { baseRef: selectedBaseRef } : {}),
-            ignoreWhitespace: diffIgnoreWhitespace,
-          },
-        })
-      : null,
-  );
-  const branchDiffPreview = shouldRetryBranchDiffAtEnvironmentCwd
-    ? fallbackBranchDiffPreview
-    : primaryBranchDiffPreview;
   const canRefreshGitDiff =
     isGitRepo && selectedRunId === null && activeThread != null && activeCwd != null;
   const activeThreadRefreshKey = routeThreadRef
@@ -386,6 +383,7 @@ export default function DiffPanel({
       return undefined;
     }
 
+    if (!canReadFiles) return undefined;
     return createGitDiffFileContentsLoader(getDiffFileContents, {
       environmentId: activeThread.environmentId,
       cwd: preview.cwd,
@@ -394,7 +392,14 @@ export default function DiffPanel({
       headRef: selectedGitSource.headRef,
       cacheKey: selectedGitSource.diffHash,
     });
-  }, [activeThread, branchDiffPreview.data, getDiffFileContents, selectedGitSource, selectedRunId]);
+  }, [
+    activeThread,
+    branchDiffPreview.data,
+    getDiffFileContents,
+    canReadFiles,
+    selectedGitSource,
+    selectedRunId,
+  ]);
   const loadDiffFilesRef = useRef(currentLoadDiffFiles);
   loadDiffFilesRef.current = currentLoadDiffFiles;
   const loadDiffFiles = useCallback<FileDiffContentsLoader>(async (fileDiff) => {
@@ -643,7 +648,7 @@ export default function DiffPanel({
       openDiffFilePrimaryAction({
         threadRef: routeThreadRef,
         filePath,
-        activeCwd,
+        activeCwd: activeFileRoot,
         repositoryRoot: activeRepositoryRoot,
         openInEditor: (targetPath) => {
           void (async () => {
@@ -664,7 +669,7 @@ export default function DiffPanel({
         },
       });
     },
-    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef],
+    [activeFileRoot, activeRepositoryRoot, openInPreferredEditor, routeThreadRef],
   );
   const collapseDefaultsRef = useRef({ collapseScopeKey, defaultCollapsedDiffFileKeys });
   useLayoutEffect(() => {
@@ -681,6 +686,18 @@ export default function DiffPanel({
       } else {
         next.add(fileKey);
       }
+      return { scopeKey: collapseScopeKey, fileKeys: next };
+    });
+  }, []);
+  // Find can ask again before the unfolded file reaches the viewer, so this must never fold.
+  const unfoldDiffFile = useCallback((fileKey: string) => {
+    const { collapseScopeKey, defaultCollapsedDiffFileKeys } = collapseDefaultsRef.current;
+    setCollapsedDiffFiles((current) => {
+      const fileKeys =
+        current.scopeKey === collapseScopeKey ? current.fileKeys : defaultCollapsedDiffFileKeys;
+      if (!fileKeys.has(fileKey)) return current;
+      const next = new Set(fileKeys);
+      next.delete(fileKey);
       return { scopeKey: collapseScopeKey, fileKeys: next };
     });
   }, []);
@@ -1051,6 +1068,14 @@ export default function DiffPanel({
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           No completed turns yet.
         </div>
+      ) : selectedRunId === null && !canReadFiles ? (
+        fileAccess.isPending ? (
+          <DiffPanelLoadingState label="Checking file access..." />
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
+            {fileAccess.error ?? "This connection cannot read local diffs."}
+          </div>
+        )
       ) : (
         <>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
@@ -1133,7 +1158,7 @@ export default function DiffPanel({
                       {
                         environmentId: activeThread?.environmentId ?? null,
                         filePath,
-                        workspaceRoot: activeCwd,
+                        workspaceRoot: activeFileRoot,
                         repositoryRoot: activeRepositoryRoot,
                       },
                       event,
@@ -1178,6 +1203,7 @@ export default function DiffPanel({
                           },
                         }
                       : {})}
+                    onRevealSearchMatch={unfoldDiffFile}
                     renderHeaderPrefix={(fileDiff, fileKey) => {
                       const unavailable = fileDiff.cacheKey?.endsWith(":pending") === true;
                       return (
