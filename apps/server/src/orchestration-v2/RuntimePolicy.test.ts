@@ -17,7 +17,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
 
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
-import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
